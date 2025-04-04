@@ -1,4 +1,7 @@
+from src.erewhon_astro import PlateSolve
+
 def main():
+    plate_solve = PlateSolve()
     print("Hello from astro!")
 
 
