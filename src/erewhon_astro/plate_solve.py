@@ -40,7 +40,7 @@ class Solution(BaseModel):
 
 class PlateSolve(BaseSettings):
     """Plate solve model."""
-    model_config = SettingsConfigDict(env_file='../../.env', env_file_encoding='utf-8')
+    model_config = SettingsConfigDict(env_file='.env', env_file_encoding='utf-8')
 
     astrometry_api_key: str = ''
 
