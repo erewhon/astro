@@ -35,10 +35,12 @@ class Annotation(BaseModel):
     pixely: float
     radius: float
 
+
 class AnnotationResponse(BaseModel):
     """Annotation response model."""
     status: str
     annotations: list[Annotation]
+
 
 class Solution(BaseModel):
     """Solution model."""
@@ -54,22 +56,28 @@ class PlateSolve(BaseSettings):
 
     astrometry_api_key: str = ''
 
-    def solve(self, image_path, *, local_solve=False) -> Solution:
+    def solve(self, image_path, *, local_solve=False, index_dir: str = None) -> Solution:
         """Solve plate for an image."""
         if local_solve:
-            # todo : remove need for external script
             # We put temporary output in a temp directory
             # that gets cleaned up when done.
             with tempfile.TemporaryDirectory() as temp_dir:
                 with tempfile.NamedTemporaryFile(mode='w+', delete=False) as temp_file:
-                    output = subprocess.Popen(["solve-field",
-                                               "--overwrite",
-                                               "--no-plots",
-                                               "--dir", temp_dir,
-                                               "--wcs", temp_file.name,
-                                               image_path],
-                                              stdout=subprocess.PIPE,
-                                              stderr=subprocess.DEVNULL).stdout.read()
+                    args: list[str] = [
+                        "solve-field",
+                        "--overwrite",
+                        "--no-plots",
+                        "--dir", temp_dir,
+                        "--wcs", temp_file.name,
+                    ]
+                    if index_dir:
+                        args.append("--index-dir")
+                        args.append(index_dir)
+                    args.append(image_path)
+
+                    subprocess.Popen(args,
+                                     stdout=subprocess.PIPE,
+                                     stderr=subprocess.DEVNULL).stdout.read()
 
                     lines = subprocess.Popen(["wcsinfo", temp_file.name], stdout=subprocess.PIPE).stdout.readlines()
                     values = {}
@@ -155,49 +163,3 @@ if __name__ == "__main__":
     plate_solve = PlateSolve()
     solution = plate_solve.solve("test_images/test_image.jpg")
     print(solution)
-
-# #!/usr/bin/env sh
-#
-# INPUT="$1"
-# OUTPUT="./tmp.wcs"
-#
-# DIR="/opt/homebrew/Cellar/astrometry-net/0.97/data"
-# if [ -r "/Volumes/T7 Shield/AstroPhotos/AstrometryData" ]; then
-#     DIR="/Volumes/T7 Shield/AstroPhotos/AstrometryData"
-# fi
-#
-# #echo "$0 Solving...."
-# solve-field --overwrite              \
-#             --no-plots               \
-#             --index-dir  "$DIR"      \
-#             --wcs        "$OUTPUT"   \
-#             "$INPUT"
-# #> /dev/null 2>&1
-#
-# #            --corr       none        \
-# #            --new-fits   none        \
-# #            --scamp      none        \
-# #            --index-xyls none        \
-# #            --axy        none        \
-# #            --pnm        none        \
-# #            --kmz        none        \
-#
-# if [ -r "$OUTPUT" ]; then
-#   #echo "$0 Plotting constellations"
-#   plot-constellations \
-#       -L \
-#       -w "$OUTPUT" \
-#       -N \
-#       -J \
-#       -B \
-#       -D \
-#       -d /opt/homebrew/opt/astrometry-net/data/hd.fits \
-#       2>&1 1>/dev/null
-# else
-#     echo '[]'
-# fi
-#
-# #echo "$0 Done"
-# #/bin/rm "$OUTPUT"
-#
-# # 2>&1 1>/dev/null | jq .annotations
