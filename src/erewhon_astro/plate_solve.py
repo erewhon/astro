@@ -1,11 +1,14 @@
 import json
+import os
 import subprocess
+import tempfile
 import time
 
 import requests
 from astroquery.astrometry_net import AstrometryNet
 from pydantic import BaseModel
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from astropy import wcs
 
 
 class Settings(BaseSettings):
@@ -21,7 +24,7 @@ class Calibration(BaseModel):
     orientation: float
     parity: float
     pixscale: float
-    radius: float
+    radius: float = 0.0
 
 
 class Annotation(BaseModel):
@@ -32,10 +35,17 @@ class Annotation(BaseModel):
     pixely: float
     radius: float
 
+class AnnotationResponse(BaseModel):
+    """Annotation response model."""
+    status: str
+    annotations: list[Annotation]
+
 class Solution(BaseModel):
     """Solution model."""
     calibration: Calibration | None = None
     annotations: list[Annotation]
+    job_id: int | None = None
+    local_solve: bool = False
 
 
 class PlateSolve(BaseSettings):
@@ -48,10 +58,62 @@ class PlateSolve(BaseSettings):
         """Solve plate for an image."""
         if local_solve:
             # todo : remove need for external script
-            output = subprocess.Popen(["./scripts/solve.sh", image_path], stdout=subprocess.PIPE).stdout.read()
-            print(f"Output: {output}")
-            _json = json.loads(output)
-            return Solution(annotations=_json["annotations"])
+            # We put temporary output in a temp directory
+            # that gets cleaned up when done.
+            with tempfile.TemporaryDirectory() as temp_dir:
+                with tempfile.NamedTemporaryFile(mode='w+', delete=False) as temp_file:
+                    output = subprocess.Popen(["solve-field",
+                                               "--overwrite",
+                                               "--no-plots",
+                                               "--dir", temp_dir,
+                                               "--wcs", temp_file.name,
+                                               image_path],
+                                              stdout=subprocess.PIPE,
+                                              stderr=subprocess.DEVNULL).stdout.read()
+
+                    lines = subprocess.Popen(["wcsinfo", temp_file.name], stdout=subprocess.PIPE).stdout.readlines()
+                    values = {}
+                    for line in lines:
+                        k, v = line.decode().strip().split(" ")
+                        values[k] = v
+
+                    match values["fieldunits"]:
+                        case "arcminutes":
+                            field_scale = 60.0
+                        case "arcseconds":
+                            field_scale = 1.0
+                        case "degrees":
+                            field_scale = 3600.0
+                        case _:
+                            field_scale = 1.0
+
+                    calibration = Calibration(
+                        ra=float(values.get("crval0", 0)),
+                        dec=float(values.get("crval1", 0)),
+                        width_arcsec=field_scale * float(values.get("fieldw", 0)),
+                        height_arcsec=field_scale * float(values.get("fieldh", 0)),
+                        orientation=float(values.get("orientation", 0)),
+                        parity=int(values.get("parity", 0)),
+                        pixscale=float(values.get("pixscale", 0)),
+                        # radius=float(values["radius"]),
+                    )
+
+                    output = subprocess.Popen(["plot-constellations",
+                                               "-L",
+                                               "-w", temp_file.name,
+                                               "-N",
+                                               "-J",
+                                               "-B",
+                                               ],
+                                              stdout=subprocess.DEVNULL,
+                                              stderr=subprocess.PIPE).stderr.read()
+                    response = AnnotationResponse.model_validate_json(output)
+                    print("Plot:", response)
+
+                    return Solution(
+                        local_solve=local_solve,
+                        calibration=calibration,
+                        annotations=response.annotations)
 
         # Create an Astroquery instance
         an = AstrometryNet()
@@ -85,9 +147,57 @@ class PlateSolve(BaseSettings):
         response = requests.get(f'https://nova.astrometry.net/api/jobs/{job_id}/calibration')
         calibration = response.json()
 
-        return Solution(calibration=calibration, annotations=annotations)
+        return Solution(local_solve=True, job_id=job_id,
+                        calibration=calibration, annotations=annotations)
+
 
 if __name__ == "__main__":
     plate_solve = PlateSolve()
     solution = plate_solve.solve("test_images/test_image.jpg")
     print(solution)
+
+# #!/usr/bin/env sh
+#
+# INPUT="$1"
+# OUTPUT="./tmp.wcs"
+#
+# DIR="/opt/homebrew/Cellar/astrometry-net/0.97/data"
+# if [ -r "/Volumes/T7 Shield/AstroPhotos/AstrometryData" ]; then
+#     DIR="/Volumes/T7 Shield/AstroPhotos/AstrometryData"
+# fi
+#
+# #echo "$0 Solving...."
+# solve-field --overwrite              \
+#             --no-plots               \
+#             --index-dir  "$DIR"      \
+#             --wcs        "$OUTPUT"   \
+#             "$INPUT"
+# #> /dev/null 2>&1
+#
+# #            --corr       none        \
+# #            --new-fits   none        \
+# #            --scamp      none        \
+# #            --index-xyls none        \
+# #            --axy        none        \
+# #            --pnm        none        \
+# #            --kmz        none        \
+#
+# if [ -r "$OUTPUT" ]; then
+#   #echo "$0 Plotting constellations"
+#   plot-constellations \
+#       -L \
+#       -w "$OUTPUT" \
+#       -N \
+#       -J \
+#       -B \
+#       -D \
+#       -d /opt/homebrew/opt/astrometry-net/data/hd.fits \
+#       2>&1 1>/dev/null
+# else
+#     echo '[]'
+# fi
+#
+# #echo "$0 Done"
+# #/bin/rm "$OUTPUT"
+#
+# # 2>&1 1>/dev/null | jq .annotations
