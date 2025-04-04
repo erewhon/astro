@@ -1,2 +1,3 @@
 # astro
-Various astro-related code
+
+Various astronomy-related code
